@@ -1,772 +1,466 @@
 // ============================================================
-// Packsolution Order System — Full JS Logic (Fixed & Optimized)
-// ডেলিভারি চার্জ: Inside Dhaka = ৳80, Outside Dhaka = ৳130
-// ওজন ভিত্তিক চার্জ: ১ কেজি পার হলে প্রতি অতিরিক্ত কেজিতে ৳20 যোগ হবে
+// Packsolution Order System — with Discount + Unlimited Qty
+// Inside Dhaka = ৳80, Outside Dhaka = ৳130, +৳20 per extra kg
+// Discount = taka per piece/roll. Set with data-discount="2" on a .size-option
 // ============================================================
 
-const WHATSAPP_NUMBER = "8801629370622"; 
-
-const DELIVERY_CHARGE = {
-    "Inside Dhaka": 80,
-    "Outside Dhaka": 130
-};
+const WHATSAPP_NUMBER = "8801629370622";
+const DELIVERY_CHARGE = { "Inside Dhaka": 80, "Outside Dhaka": 130 };
 const WEIGHT_CHARGE_PER_KG = 20;
 
+// true  = every size card shows an editable "ছাড়" input
+// false = discount comes only from data-discount in HTML (customers can't edit)
+const SHOW_DISCOUNT_INPUT = true;
 
-// ==========================================
-// ১. কার্ড ওপেন/ক্লোজ (Toggle) করার ফাংশন
-// ==========================================
-function toggleCard(cardHeader) {
-    const card = cardHeader.closest('.product-card');
-    if (!card) return;
-    const bodyContent = card.querySelector('.card-body-content');
-    if (!bodyContent) return;
+const money = n => '৳' + (+Number(n).toFixed(2));
 
-    const isHidden = bodyContent.classList.contains('hidden');
+// ---------- helpers ----------
+const getUnitPrice = opt => parseFloat(opt.getAttribute('data-unit-price')) || 0;
 
-    if (isHidden) {
-        bodyContent.classList.remove('hidden');
-        cardHeader.setAttribute('aria-expanded', 'true');
-    } else {
-        bodyContent.classList.add('hidden');
-        cardHeader.setAttribute('aria-expanded', 'false');
-    }
+function getDiscount(opt) {
+    const inp = opt.querySelector('.discount-input');
+    let d = inp ? parseFloat(inp.value) : parseFloat(opt.getAttribute('data-discount'));
+    if (isNaN(d) || d < 0) d = 0;
+    return Math.min(d, getUnitPrice(opt)); // discount can't exceed price
 }
 
+function getMin(opt) {
+    const inp = opt.querySelector('.quantity-box input[type="number"]');
+    return (inp && parseInt(inp.getAttribute('min'), 10)) || parseInt(opt.getAttribute('data-min'), 10) || 1;
+}
 
-// ==========================================
-// ১.১ ছবি আপলোড হ্যান্ডেল করার নতুন ফাংশন
-// ==========================================
-function handleImageUpload(event, inputElement) {
+// ---------- 1. toggle card ----------
+function toggleCard(header) {
+    const body = header.closest('.product-card')?.querySelector('.card-body-content');
+    if (!body) return;
+    const hidden = body.classList.toggle('hidden');
+    header.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+}
+
+function handleImageUpload(event, input) {
     if (event) event.stopPropagation();
-    const card = inputElement.closest('.product-card');
+    const card = input.closest('.product-card');
     if (!card) return;
-
-    const file = inputElement.files[0];
-    if (file) {
-        card.dataset.uploadedFileName = file.name;
-    } else {
-        delete card.dataset.uploadedFileName;
-    }
-    
+    const f = input.files[0];
+    if (f) card.dataset.uploadedFileName = f.name; else delete card.dataset.uploadedFileName;
     updateStickySummary();
 }
 
+// ---------- 2. select / deselect size ----------
+function selectSizeOption(opt, unitPrice) {
+    const card = opt.closest('.product-card');
+    const qtyBox = opt.querySelector('.quantity-box');
+    const discBox = opt.querySelector('.discount-box');
+    const radio = opt.querySelector('.custom-radio');
 
-// ==========================================
-// ২. সাইজ অপশন সিলেক্ট/ডি-সিলেক্ট করার ফাংশন
-// ==========================================
-function selectSizeOption(optionElement, unitPrice) {
-    const card = optionElement.closest('.product-card');
-    const quantityBox = optionElement.querySelector('.quantity-box');
-    const radio = optionElement.querySelector('.custom-radio');
+    if (unitPrice !== undefined) opt.setAttribute('data-unit-price', unitPrice);
+    unitPrice = getUnitPrice(opt);
 
-    // unitPrice dataset এ সেভ রাখা নিরাপদ
-    if (unitPrice !== undefined) {
-        optionElement.setAttribute('data-unit-price', unitPrice);
-    } else {
-        unitPrice = parseFloat(optionElement.getAttribute('data-unit-price')) || 0;
-    }
-
-    const isSelected = optionElement.classList.contains('border-blue-500');
-
-    if (isSelected) {
-        // ডি-সিলেক্ট করা
-        optionElement.classList.remove('border-blue-500', 'bg-blue-50/30');
-        optionElement.classList.add('border-slate-200', 'bg-white');
-
+    if (opt.classList.contains('border-blue-500')) {
+        opt.classList.remove('border-blue-500', 'bg-blue-50/30');
+        opt.classList.add('border-slate-200', 'bg-white');
         if (radio) {
             radio.classList.remove('bg-blue-600', 'border-blue-600');
             radio.classList.add('bg-white', 'border-slate-300');
             radio.innerText = '';
         }
-        if (quantityBox) quantityBox.classList.add('hidden');
-
-        // 🎨 সাইজ ডি-সিলেক্ট হলে, এই সাইজের ভিতরের কালার সিলেকশনও রিসেট হবে
-        resetColorSelection(optionElement);
-
+        if (qtyBox) qtyBox.classList.add('hidden');
+        if (discBox) discBox.classList.add('hidden');
+        resetColorSelection(opt);
     } else {
-        // নতুন অপশন সিলেক্ট করা
-        optionElement.classList.remove('border-slate-200', 'bg-white');
-        optionElement.classList.add('border-blue-500', 'bg-blue-50/30');
-
+        opt.classList.remove('border-slate-200', 'bg-white');
+        opt.classList.add('border-blue-500', 'bg-blue-50/30');
         if (radio) {
             radio.classList.remove('bg-white', 'border-slate-300');
             radio.classList.add('bg-blue-600', 'border-blue-600');
             radio.innerText = '✓';
         }
-        if (quantityBox) quantityBox.classList.remove('hidden');
+        if (qtyBox) qtyBox.classList.remove('hidden');
+        if (discBox) discBox.classList.remove('hidden');
 
-        // HTML min attribute / data-min অনুযায়ী কোয়ান্টিটি নেওয়া (ডিফল্ট ১০)
-        const qtyInput = optionElement.querySelector('.quantity-box input[type="number"]');
-        let minQty = 10; 
-        if (qtyInput) {
-            minQty = parseInt(qtyInput.getAttribute('min'), 10) || parseInt(optionElement.getAttribute('data-min'), 10) || 10;
-        }
+        const qtyInput = opt.querySelector('.quantity-box input[type="number"]');
+        const minQty = getMin(opt);
+        let val = qtyInput ? parseInt(qtyInput.value, 10) : minQty;
+        if (isNaN(val) || val < minQty) val = minQty;
+        if (qtyInput) { qtyInput.value = val; qtyInput.setAttribute('min', minQty); }
 
-        let currentVal = qtyInput ? parseInt(qtyInput.value, 10) : minQty;
-        if (isNaN(currentVal) || currentVal < minQty) {
-            currentVal = minQty;
-        }
-
-        if (qtyInput) {
-            qtyInput.value = currentVal;
-            qtyInput.setAttribute('min', minQty);
-        }
-
-        updateItemCalculations(optionElement, currentVal, unitPrice);
-
-        // 🎨 সাইজ সিলেক্ট হওয়ার সাথে সাথে, ভিতরে কালার অপশন থাকলে
-        // ডিফল্টভাবে প্রথম কালারটা অটো-সিলেক্ট/টিক করে দেওয়া হবে
-        autoSelectDefaultColor(optionElement);
+        updateItemCalculations(opt, val);
+        autoSelectDefaultColor(opt);
     }
-
     updateCardCheckmark(card);
-    updateStickySummary(); // sticky bar + transcript দুটোই আপডেট হবে
-}
-
-
-// ==========================================
-// ২.১ মেইন কার্ডের টিকমার্ক হ্যান্ডেল করার ফাংশন
-// ==========================================
-function updateCardCheckmark(card) {
-    if (!card) return;
-    const checkIcon = card.querySelector('.icon-circle');
-    if (!checkIcon) return;
-
-    const selectedSizesInCard = card.querySelectorAll('.size-option.border-blue-500');
-
-    if (selectedSizesInCard.length > 0) {
-        checkIcon.classList.remove('bg-white', 'border-slate-300');
-        checkIcon.classList.add('bg-emerald-500', 'border-emerald-500');
-        checkIcon.innerText = '✓';
-    } else {
-        checkIcon.classList.remove('bg-emerald-500', 'border-emerald-500');
-        checkIcon.classList.add('bg-white', 'border-slate-300');
-        checkIcon.innerText = '';
-    }
-}
-
-
-// ==========================================
-// ৩. পরিমাণ (Quantity) বাড়ানো/কমানোর ফাংশন (+/- বাটনের জন্য)
-// ==========================================
-function changeQuantity(event, btnElement, step, unitPrice) {
-    if (event) event.stopPropagation(); // কার্ড বন্ধ হওয়া ঠেকাবে
-
-    const quantityBox = btnElement.closest('.quantity-box');
-    const sizeOption = btnElement.closest('.size-option');
-    const input = quantityBox.querySelector('input[type="number"]');
-
-    if (unitPrice === undefined) {
-        unitPrice = parseFloat(sizeOption.getAttribute('data-unit-price')) || 0;
-    } else {
-        sizeOption.setAttribute('data-unit-price', unitPrice);
-    }
-
-    let minVal = parseInt(input.getAttribute('min'), 10) || parseInt(sizeOption.getAttribute('data-min'), 10) || 10;
-    let currentVal = parseInt(input.value, 10) || minVal;
-
-    let newVal = currentVal + step;
-    if (newVal < minVal) newVal = minVal;
-
-    input.value = newVal;
-
-    updateItemCalculations(sizeOption, newVal, unitPrice);
     updateStickySummary();
 }
 
+function updateCardCheckmark(card) {
+    const icon = card && card.querySelector('.icon-circle');
+    if (!icon) return;
+    const any = card.querySelectorAll('.size-option.border-blue-500').length > 0;
+    icon.classList.toggle('bg-emerald-500', any);
+    icon.classList.toggle('border-emerald-500', any);
+    icon.classList.toggle('bg-white', !any);
+    icon.classList.toggle('border-slate-300', !any);
+    icon.innerText = any ? '✓' : '';
+}
 
-// ==========================================
-// ৩.১ ম্যানুয়ালি ইনপুট বক্সে টাইপ করার হ্যান্ডলার
-// ==========================================
-// function handleManualInput(event, inputElement, unitPrice) {
-//     if (event) event.stopPropagation();
+// ---------- 3. quantity (+ / - / typing) — NO maximum ----------
+function changeQuantity(event, btn, step) {
+    if (event) event.stopPropagation();
+    const opt = btn.closest('.size-option');
+    const input = opt.querySelector('.quantity-box input[type="number"]');
+    const min = getMin(opt);
+    let val = (parseInt(input.value, 10) || min) + step;
+    if (val < min) val = min;
+    input.value = val;
+    updateItemCalculations(opt, val);
+    updateStickySummary();
+}
 
-//     const sizeOption = inputElement.closest('.size-option');
-//     if (unitPrice === undefined) {
-//         unitPrice = parseFloat(sizeOption.getAttribute('data-unit-price')) || 0;
-//     }
+function handleManualInput(event, input) {
+    if (event) event.stopPropagation();
+    const opt = input.closest('.size-option');
+    const val = parseInt(input.value, 10);
+    updateItemCalculations(opt, isNaN(val) || val < 0 ? 0 : val); // any number allowed while typing
+    updateStickySummary();
+}
 
-//     let currentVal = parseInt(inputElement.value, 10);
+function validateInputLimit(event, input) {
+    if (event) event.stopPropagation();
+    const opt = input.closest('.size-option');
+    const min = getMin(opt);
+    let val = parseInt(input.value, 10);
+    if (isNaN(val) || val < min) val = min;   // only a minimum, never a maximum
+    input.value = val;
+    updateItemCalculations(opt, val);
+    updateStickySummary();
+}
 
-//     if (isNaN(currentVal) || currentVal < 0) {
-//         currentVal = 0;
-//     }
-
-//     updateItemCalculations(sizeOption, currentVal, unitPrice);
-//     updateStickySummary();
-// }
-
-// // টাইপিং শেষ হলে কন্টেন্ট ভ্যালিডেশন
-// function validateInputLimit(event, inputElement, unitPrice) {
-//     if (event) event.stopPropagation();
-
-//     const sizeOption = inputElement.closest('.size-option');
-//     if (unitPrice === undefined) {
-//         unitPrice = parseFloat(sizeOption.getAttribute('data-unit-price')) || 0;
-//     }
-
-//     let minVal = parseInt(inputElement.getAttribute('min'), 10) || parseInt(sizeOption.getAttribute('data-min'), 10) || 10;
-//     let currentVal = parseInt(inputElement.value, 10) || 0;
-
-//     if (currentVal < minVal) {
-//         inputElement.value = minVal;
-//         currentVal = minVal;
-//     }
-
-//     updateItemCalculations(sizeOption, currentVal, unitPrice);
-//     updateStickySummary();
-// }
-
-
-// ==========================================
-// ৪. কালার সিলেক্ট করার ফাংশন (আপডেটেড)
-// ==========================================
-// এই একটা ফাংশন এখন দুই ধরনের কালার UI-ই হ্যান্ডেল করে:
-//  ক) Card 5-এর মতো, পুরো প্রোডাক্ট কার্ডের জন্য আলাদা "color-selection-section"
-//  খ) Card 3-এর মতো, প্রতিটা সাইজ-অপশনের ভিতরে বসানো color label (Brown/White)
-function selectColor(labelOrBtn, colorName, priceOverride) {
-    const card = labelOrBtn.closest('.product-card');
+// ---------- 4. colors ----------
+function selectColor(el, colorName, priceOverride) {
+    const card = el.closest('.product-card');
     if (!card) return;
+    const legacy = el.closest('.color-selection-section');
+    const opt = el.closest('.size-option');
 
-    const legacyContainer = labelOrBtn.closest('.color-selection-section');
-    const sizeOption = labelOrBtn.closest('.size-option');
-
-    if (legacyContainer) {
-        // ==== (ক) পুরো কার্ডের জন্য কালার বাটন (Card 5 স্টাইল) ====
-        legacyContainer.querySelectorAll('.color-btn').forEach(b => {
+    if (legacy) {
+        legacy.querySelectorAll('.color-btn').forEach(b => {
             b.classList.remove('border-blue-500', 'bg-blue-50', 'ring-2', 'ring-blue-300');
             b.classList.add('border-slate-300');
         });
-
-        labelOrBtn.classList.remove('border-slate-300');
-        labelOrBtn.classList.add('border-blue-500', 'bg-blue-50', 'ring-2', 'ring-blue-300');
-
+        el.classList.remove('border-slate-300');
+        el.classList.add('border-blue-500', 'bg-blue-50', 'ring-2', 'ring-blue-300');
         card.dataset.selectedColor = colorName;
-
-    } else if (sizeOption) {
-        // ==== (খ) সাইজ-অপশনের ভিতরের কালার লেবেল (Card 3 স্টাইল) ====
-        const colorGroup = labelOrBtn.parentElement; // এই সাইজের কালার-লেবেলগুলোর কমন প্যারেন্ট
-        if (!colorGroup) return;
-
-        // এই সাইজ-অপশনের ভিতরের সবগুলো কালার লেবেল থেকে আগের সিলেকশন/টিক মুছে ফেলা
-        colorGroup.querySelectorAll('label').forEach(lbl => {
-            const circle = lbl.querySelector('div');
-            if (circle) {
-                circle.classList.remove('ring-2', 'ring-blue-400', 'ring-offset-1');
-                const innerDot = circle.querySelector('div');
-                if (innerDot) innerDot.classList.remove('hidden');
-                const existingCheck = circle.querySelector('.color-check-mark');
-                if (existingCheck) existingCheck.remove();
-            }
-        });
-
-        // ক্লিক করা কালারটাতে টিক মার্ক (✓) বসানো
-        const clickedCircle = labelOrBtn.querySelector('div');
-        if (clickedCircle) {
-            clickedCircle.classList.add('ring-2', 'ring-blue-400', 'ring-offset-1');
-            const innerDot = clickedCircle.querySelector('div');
-            if (innerDot) innerDot.classList.add('hidden');
-
-            const checkMark = document.createElement('span');
-            checkMark.className = 'color-check-mark text-white text-[8px] font-bold leading-none';
-            checkMark.innerText = '✓';
-            clickedCircle.appendChild(checkMark);
+    } else if (opt) {
+        clearColorMarks(el.parentElement);
+        const circle = el.querySelector('div');
+        if (circle) {
+            circle.classList.add('ring-2', 'ring-blue-400', 'ring-offset-1');
+            const dot = circle.querySelector('div');
+            if (dot) dot.classList.add('hidden');
+            const mark = document.createElement('span');
+            mark.className = 'color-check-mark text-white text-[8px] font-bold leading-none';
+            mark.innerText = '✓';
+            circle.appendChild(mark);
         }
+        opt.dataset.selectedColor = colorName;
 
-        // এই নির্দিষ্ট সাইজ-অপশনে কালারের নাম সেভ রাখা (WhatsApp/Transcript এর জন্য)
-        sizeOption.dataset.selectedColor = colorName;
-
-        // 💰 কালার অনুযায়ী দাম বদলানো (যেমন: Brown ৳25, White ৳30)
         if (priceOverride !== undefined && !isNaN(parseFloat(priceOverride))) {
-            const newUnitPrice = parseFloat(priceOverride);
-            sizeOption.setAttribute('data-unit-price', newUnitPrice);
-
-            // উপরের দাম-লেবেল (৳25 / ৳30) আপডেট করা, যদি এলিমেন্টটা থাকে
-            const priceDisplay = sizeOption.querySelector('.price-display');
-            if (priceDisplay) {
-                priceDisplay.innerText = '৳' + newUnitPrice;
-            }
-
-            // বর্তমান কোয়ান্টিটি অনুযায়ী টোটাল প্রাইস/ওজন রিক্যালকুলেট করা
-            const qtyInput = sizeOption.querySelector('.quantity-box input[type="number"]');
-            const currentQty = qtyInput ? (parseInt(qtyInput.value, 10) || 0) : 0;
-            if (currentQty > 0) {
-                updateItemCalculations(sizeOption, currentQty, newUnitPrice);
-            }
+            const p = parseFloat(priceOverride);
+            opt.setAttribute('data-unit-price', p);
+            const pd = opt.querySelector('.price-display');
+            if (pd) pd.innerText = '৳' + p;
+            const qty = parseInt(opt.querySelector('.quantity-box input[type="number"]')?.value, 10) || 0;
+            if (qty > 0) updateItemCalculations(opt, qty);
         }
     }
-
     updateStickySummary();
 }
 
-
-// ==========================================
-// ৪.১ সাইজ সিলেক্ট হলে ডিফল্ট কালার অটো-সিলেক্ট করা
-// ==========================================
-function autoSelectDefaultColor(sizeOption) {
-    // এই সাইজ-অপশনের ভিতরে কোনো কালার-লেবেল গ্রুপ আছে কিনা খুঁজে বের করা
-    const colorLabels = sizeOption.querySelectorAll(':scope > .flex.items-center.gap-4 label, :scope > div > label');
-    let firstLabel = sizeOption.querySelector('label[onclick*="selectColor"]');
-
-    if (!firstLabel) return; // এই সাইজে কোনো কালার অপশন নেই
-
-    // ইতিমধ্যে কোনো কালার সিলেক্টেড থাকলে আবার রিসেট করার দরকার নেই
-    if (sizeOption.dataset.selectedColor) return;
-
-    const onclickAttr = firstLabel.getAttribute('onclick') || '';
-    const match = onclickAttr.match(/selectColor\(this,\s*'([^']+)'/);
-    const colorName = match ? match[1] : null;
-
-    if (colorName) {
-        selectColor(firstLabel, colorName);
-    }
-}
-
-
-// ==========================================
-// ৪.২ সাইজ ডি-সিলেক্ট হলে কালার সিলেকশন রিসেট করা
-// ==========================================
-function resetColorSelection(sizeOption) {
-    const colorLabels = sizeOption.querySelectorAll('label[onclick*="selectColor"]');
-    colorLabels.forEach(lbl => {
-        const circle = lbl.querySelector('div');
-        if (circle) {
-            circle.classList.remove('ring-2', 'ring-blue-400', 'ring-offset-1');
-            const innerDot = circle.querySelector('div');
-            if (innerDot) innerDot.classList.remove('hidden');
-            const existingCheck = circle.querySelector('.color-check-mark');
-            if (existingCheck) existingCheck.remove();
-        }
+function clearColorMarks(group) {
+    if (!group) return;
+    group.querySelectorAll('label').forEach(lbl => {
+        const c = lbl.querySelector('div');
+        if (!c) return;
+        c.classList.remove('ring-2', 'ring-blue-400', 'ring-offset-1');
+        c.querySelector('div')?.classList.remove('hidden');
+        c.querySelector('.color-check-mark')?.remove();
     });
-    delete sizeOption.dataset.selectedColor;
 }
 
+function autoSelectDefaultColor(opt) {
+    const first = opt.querySelector('label[onclick*="selectColor"]');
+    if (!first || opt.dataset.selectedColor) return;
+    const m = (first.getAttribute('onclick') || '').match(/selectColor\(this,\s*'([^']+)'(?:,\s*([\d.]+))?/);
+    if (m) selectColor(first, m[1], m[2]);
+}
 
-// ==========================================
-// ৪.৩ পুরো কার্ডের কালার সেকশনের জন্য ডিফল্ট কালার অটো-সিলেক্ট
-//     (Card 5, Card 6 স্টাইল — .color-selection-section ব্যবহার করে)
-// ==========================================
+function resetColorSelection(opt) {
+    opt.querySelectorAll('label[onclick*="selectColor"]').forEach(lbl => {
+        const c = lbl.querySelector('div');
+        if (!c) return;
+        c.classList.remove('ring-2', 'ring-blue-400', 'ring-offset-1');
+        c.querySelector('div')?.classList.remove('hidden');
+        c.querySelector('.color-check-mark')?.remove();
+    });
+    delete opt.dataset.selectedColor;
+}
+
 function autoSelectDefaultCardColors() {
-    document.querySelectorAll('.color-selection-section').forEach(section => {
-        const firstBtn = section.querySelector('.color-btn');
-        if (!firstBtn) return;
-
-        const card = firstBtn.closest('.product-card');
-        if (card && card.dataset.selectedColor) return; // আগে থেকেই সিলেক্ট থাকলে স্কিপ
-
-        const onclickAttr = firstBtn.getAttribute('onclick') || '';
-        const match = onclickAttr.match(/selectColor\(this,\s*'([^']+)'/);
-        const colorName = match ? match[1] : null;
-
-        if (colorName) {
-            selectColor(firstBtn, colorName);
-        }
+    document.querySelectorAll('.color-selection-section').forEach(sec => {
+        const btn = sec.querySelector('.color-btn');
+        if (!btn || btn.closest('.product-card')?.dataset.selectedColor) return;
+        const m = (btn.getAttribute('onclick') || '').match(/selectColor\(this,\s*'([^']+)'/);
+        if (m) selectColor(btn, m[1]);
     });
 }
 
-
-// ==========================================
-// ৫. ওজন (Weight in Grams) বের করার ডাইনামিক লজিক
-// ==========================================
-function calculateWeightFromOption(card, sizeText, optionElement) {
-    if (optionElement) {
-        let customWeight = parseFloat(optionElement.getAttribute('data-unit-weight') || optionElement.getAttribute('data-weight'));
-        if (!isNaN(customWeight) && customWeight > 0) {
-            return customWeight;
-        }
+// ---------- 5. weight ----------
+function calculateWeightFromOption(card, sizeText, opt) {
+    if (opt) {
+        const w = parseFloat(opt.getAttribute('data-unit-weight') || opt.getAttribute('data-weight'));
+        if (!isNaN(w) && w > 0) return w;
     }
-
     if (!sizeText) return 0;
-    let text = sizeText.toLowerCase();
-    const productTitle = card ? (card.querySelector('h3')?.innerText.toLowerCase() || '') : '';
+    const text = sizeText.toLowerCase();
+    const title = card ? (card.querySelector('h3')?.innerText.toLowerCase() || '') : '';
 
-    if (productTitle.includes('tie') || productTitle.includes('টাই') || text.includes('tie')) {
+    if (title.includes('tie') || title.includes('টাই') || text.includes('tie')) {
         if (text.includes('8') || text.includes('৮')) return 1.2;
         if (text.includes('12') || text.includes('১২')) return 2.5;
         return 1.5;
     }
+    if (title.includes('sticker') || title.includes('স্টিকার')) return 1.0;
+    if (title.includes('marker') || title.includes('মার্কার')) return 20.0;
+    if (text.includes('গজ') || text.includes('yard')) return (parseFloat((text.match(/\d+/) || [0])[0]) || 0) * 45;
 
-    if (productTitle.includes('daraz') || productTitle.includes('poly') || productTitle.includes('পলি') || productTitle.includes('mailer')) {
-        if (text.includes('6/8') || text.includes('৬/৮') || (text.includes('6') && text.includes('8'))) return 4.5;
-        if (text.includes('8/10') || text.includes('৮/১০') || (text.includes('8') && text.includes('10'))) return 6.5;
-        if (text.includes('10/14') || text.includes('১০/১৪') || (text.includes('10') && text.includes('14'))) return 11.0;
-        if (text.includes('12/16') || text.includes('১২/১৬') || (text.includes('12') && text.includes('16'))) return 15.0;
-        if (text.includes('14/18') || text.includes('১৪/১৮') || (text.includes('14') && text.includes('18'))) return 19.0;
-        
-        let match2D = text.match(/([\d.]+)\s*["״]?\s*[\/×xX]\s*([\d.]+)/);
-        if (match2D) {
-            let width = parseFloat(match2D[1]);
-            let length = parseFloat(match2D[2]);
-            return (width * length * 0.09);
-        }
-    }
-
-    if (productTitle.includes('sticker') || productTitle.includes('স্টিকার')) {
-        return 1.0;
-    }
-
-    if (productTitle.includes('marker') || productTitle.includes('মার্কার')) {
-        return 20.0;
-    }
-
-    if (text.includes('গজ') || text.includes('yard')) {
-        let yards = parseFloat((text.match(/\d+/) || [0])[0]) || 0;
-        return yards * 45;
-    }
-
-    let match3D = text.match(/([\d.]+)\s*x\s*([\d.]+)\s*x\s*([\d.]+)/);
-    if (match3D) {
-        let l = parseFloat(match3D[1]);
-        let w = parseFloat(match3D[2]);
-        let h = parseFloat(match3D[3]);
+    const m3 = text.match(/([\d.]+)\s*x\s*([\d.]+)\s*x\s*([\d.]+)/);
+    if (m3) {
+        const [l, w, h] = [parseFloat(m3[1]), parseFloat(m3[2]), parseFloat(m3[3])];
         return 2 * (l * w + l * h + w * h) * 0.35;
     }
-
     return 2.0;
 }
 
+// ---------- 6. per-size price / weight display ----------
+function updateItemCalculations(opt, qty) {
+    const card = opt.closest('.product-card');
+    const unit = getUnitPrice(opt);
+    const disc = getDiscount(opt);
+    const orig = qty * unit;
+    const final = qty * (unit - disc);
 
-// ==========================================
-// ৬. ইন্ডিভিজুয়াল সাইজ কার্ডের মূল্য ও ওজন আপডেট
-// ==========================================
-function updateItemCalculations(sizeOption, quantity, unitPrice) {
-    const card = sizeOption.closest('.product-card');
-
-    if (unitPrice === undefined) {
-        unitPrice = parseFloat(sizeOption.getAttribute('data-unit-price')) || 0;
+    const priceEl = opt.querySelector('.total-price-text');
+    if (priceEl) {
+        priceEl.innerHTML = disc > 0
+            ? `<s class="text-slate-400 font-medium mr-1">${money(orig)}</s>${money(final)}`
+            : money(final);
     }
 
-    const totalPriceText = sizeOption.querySelector('.total-price-text');
-    let totalPrice = quantity * unitPrice;
-
-    if (totalPriceText) {
-        totalPriceText.innerText = '৳' + (Number.isInteger(totalPrice) ? totalPrice : totalPrice.toFixed(1));
+    const info = opt.querySelector('.discount-info');
+    if (info) {
+        info.innerText = disc > 0 ? `(প্রতি পিস ${money(unit - disc)}, সাশ্রয় ${money(orig - final)})` : '';
     }
 
-    const weightDisplay = sizeOption.querySelector('.total-weight-text');
-    if (weightDisplay && card) {
-        const sizeSpan = sizeOption.querySelector('span.text-slate-700');
-        let sizeText = sizeSpan ? sizeSpan.innerText : '';
-        
-        let unitWeightGrams = calculateWeightFromOption(card, sizeText, sizeOption);
-        let totalGrams = unitWeightGrams * quantity;
-        
-        weightDisplay.innerText = totalGrams >= 1000
-            ? (totalGrams / 1000).toFixed(2).replace(/\.00$/, '') + ' kg'
-            : Math.round(totalGrams) + ' g';
+    const wEl = opt.querySelector('.total-weight-text');
+    if (wEl && card) {
+        const sizeText = opt.querySelector('span.text-slate-700')?.innerText || '';
+        const grams = calculateWeightFromOption(card, sizeText, opt) * qty;
+        wEl.innerText = grams >= 1000
+            ? (grams / 1000).toFixed(2).replace(/\.00$/, '') + ' kg'
+            : Math.round(grams) + ' g';
     }
 }
 
-
-// ==========================================
-// ৭. পুরো অর্ডারের হিসাব
-// ==========================================
+// ---------- 7. order totals ----------
 function computeOrderTotals() {
     const items = [];
-    let subtotal = 0;
-    let totalWeightGrams = 0;
+    let subtotal = 0, originalSubtotal = 0, totalWeightGrams = 0;
 
-    const selectedOptions = document.querySelectorAll('.size-option.border-blue-500');
-
-    selectedOptions.forEach(option => {
-        const card = option.closest('.product-card');
-        
-        let productId = '-';
-        if (card) {
-            const rawId = card.getAttribute('data-product-id');
-            if (rawId && rawId.trim() !== '') {
-                productId = rawId.trim();
-            }
-        }
-        
-        const productName = card ? (card.querySelector('h3') ? card.querySelector('h3').innerText.trim() : 'Product') : 'Product';
-        const sizeSpan = option.querySelector('span.text-slate-700');
-        const sizeText = sizeSpan ? sizeSpan.innerText.trim() : '';
-
-        const qtyInput = option.querySelector('.quantity-box input[type="number"]');
+    document.querySelectorAll('.size-option.border-blue-500').forEach(opt => {
+        const card = opt.closest('.product-card');
+        const rawId = card?.getAttribute('data-product-id');
+        const productId = rawId && rawId.trim() ? rawId.trim() : '-';
+        const productName = card?.querySelector('h3')?.innerText.trim() || 'Product';
+        const sizeText = opt.querySelector('span.text-slate-700')?.innerText.trim() || '';
+        const qtyInput = opt.querySelector('.quantity-box input[type="number"]');
         const quantity = qtyInput ? (parseInt(qtyInput.value, 10) || 0) : 1;
 
-        let unitPrice = parseFloat(option.getAttribute('data-unit-price'));
-        
-        // যদি data-unit-price না থাকে তবে DOM থেকে ব্যাকআপ ফেচ করবে
-        if (isNaN(unitPrice)) {
-            const priceTextEl = option.querySelector('.total-price-text');
-            if (priceTextEl && quantity > 0) {
-                const parsedTotal = parseFloat(priceTextEl.innerText.replace(/[^\d.]/g, '')) || 0;
-                unitPrice = parsedTotal / quantity;
-            } else {
-                const singlePriceEl = option.querySelector('.text-slate-800');
-                unitPrice = singlePriceEl ? (parseFloat(singlePriceEl.innerText.replace(/[^\d.]/g, '')) || 0) : 0;
-            }
-        }
+        const unitPrice = getUnitPrice(opt);
+        const discount = getDiscount(opt);
+        const discountedUnit = unitPrice - discount;
+        const itemOriginal = quantity * unitPrice;
+        const itemTotal = quantity * discountedUnit;
 
-        const itemTotal = quantity * unitPrice;
         subtotal += itemTotal;
-
-        const unitWeight = calculateWeightFromOption(card, sizeText, option);
-        const itemWeight = unitWeight * quantity;
+        originalSubtotal += itemOriginal;
+        const itemWeight = calculateWeightFromOption(card, sizeText, opt) * quantity;
         totalWeightGrams += itemWeight;
 
-        // 🎨 কালার নাম আগে এই নির্দিষ্ট সাইজ-অপশন থেকে খোঁজা হবে (Card 3 স্টাইল),
-        // না পেলে তারপর পুরো কার্ড থেকে খোঁজা হবে (Card 5 স্টাইল)
-        const selectedColorName = option.dataset.selectedColor || (card && card.dataset.selectedColor) || '';
-        const colorLabel = selectedColorName ? ` [কালার: ${selectedColorName}]` : '';
-
-        const uploadedFileName = card && card.dataset.uploadedFileName ? card.dataset.uploadedFileName : '';
-
-        items.push({ 
-            productId, 
-            productName, 
-            sizeText, 
-            quantity, 
-            unitPrice,
-            itemTotal, 
-            weightGrams: itemWeight, 
-            colorLabel,
-            uploadedFileName
+        const color = opt.dataset.selectedColor || card?.dataset.selectedColor || '';
+        items.push({
+            productId, productName, sizeText, quantity,
+            unitPrice, discount, discountedUnit, itemOriginal, itemTotal,
+            weightGrams: itemWeight,
+            colorLabel: color ? ` [কালার: ${color}]` : '',
+            uploadedFileName: card?.dataset.uploadedFileName || ''
         });
     });
 
-    const locationInput = document.querySelector('input[name="delivery_location"]:checked');
-    const location = locationInput ? locationInput.value : 'Outside Dhaka';
-    const isInside = location === 'Inside Dhaka';
-
-    const baseShipping = DELIVERY_CHARGE[location] ?? DELIVERY_CHARGE['Outside Dhaka'];
-    
+    const loc = document.querySelector('input[name="delivery_location"]:checked')?.value || 'Outside Dhaka';
+    const baseShipping = DELIVERY_CHARGE[loc] ?? DELIVERY_CHARGE['Outside Dhaka'];
     const weightKg = totalWeightGrams / 1000;
-    let weightCharge = 0;
-
-    if (weightKg > 1) {
-        const extraWeightKg = weightKg - 1;
-        weightCharge = Math.ceil(extraWeightKg) * WEIGHT_CHARGE_PER_KG;
-    }
-
-    const shippingCharge = items.length > 0 ? (baseShipping + weightCharge) : 0;
-    const grandTotal = subtotal + shippingCharge;
+    const weightCharge = weightKg > 1 ? Math.ceil(weightKg - 1) * WEIGHT_CHARGE_PER_KG : 0;
+    const shippingCharge = items.length > 0 ? baseShipping + weightCharge : 0;
 
     return {
-        items, subtotal, totalWeightGrams, location, isInside,
-        baseShipping, weightCharge, shippingCharge, grandTotal
+        items, subtotal, originalSubtotal, totalDiscount: originalSubtotal - subtotal,
+        totalWeightGrams, location: loc, isInside: loc === 'Inside Dhaka',
+        baseShipping, weightCharge, shippingCharge, grandTotal: subtotal + shippingCharge
     };
 }
 
-
-// ==========================================
-// ৮. স্টিকি বটম বার আপডেট
-// ==========================================
-function renderStickyBar(data) {
-    const totalPriceEl = document.getElementById('sticky-total-price');
-    const shippingEl = document.getElementById('sticky-shipping');
-    const weightEl = document.getElementById('sticky-weight');
-    const weightDetailedEl = document.getElementById('sticky-weight-detailed');
-
-    if (totalPriceEl) totalPriceEl.innerText = '৳' + data.grandTotal.toFixed(2);
-    if (shippingEl) shippingEl.innerText = '৳' + data.shippingCharge.toFixed(2);
-    
-    if (weightEl) {
-        if (data.totalWeightGrams >= 1000) {
-            weightEl.innerText = 'Weight: ' + (data.totalWeightGrams / 1000).toFixed(2) + 'kg';
-        } else {
-            weightEl.innerText = 'Weight: ' + Math.round(data.totalWeightGrams) + 'g';
-        }
-    }
-
-    const kg = Math.floor(data.totalWeightGrams / 1000);
-    const remGrams = Math.round(data.totalWeightGrams % 1000);
-    if (weightDetailedEl) weightDetailedEl.innerText = `(${kg} kg ${remGrams} g)`;
+// ---------- 8. sticky bar ----------
+function renderStickyBar(d) {
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.innerText = v; };
+    set('sticky-total-price', '৳' + d.grandTotal.toFixed(2));
+    set('sticky-shipping', '৳' + d.shippingCharge.toFixed(2));
+    set('sticky-weight', d.totalWeightGrams >= 1000
+        ? 'Weight: ' + (d.totalWeightGrams / 1000).toFixed(2) + 'kg'
+        : 'Weight: ' + Math.round(d.totalWeightGrams) + 'g');
+    set('sticky-weight-detailed',
+        `(${Math.floor(d.totalWeightGrams / 1000)} kg ${Math.round(d.totalWeightGrams % 1000)} g)`);
 }
 
+// ---------- 9. line formatting (HTML for transcript, ~strike~ for WhatsApp/copy) ----------
+function strike(text, html) { return html ? `<s>${text}</s>` : `~${text}~`; }
 
-// ==========================================
-// ৯. লাইভ ট্রান্সক্রিপ্ট আপডেট
-// ==========================================
-function renderTranscript(data) {
-    const nameInput = document.getElementById('cust-name');
-    const phoneInput = document.getElementById('cust-phone');
-    const addressInput = document.getElementById('cust-address');
+function itemLine(it, html) {
+    const hasDisc = it.discount > 0;
+    const unitPart = hasDisc ? `${strike(money(it.unitPrice), html)} ${money(it.discountedUnit)}` : money(it.unitPrice);
+    const totalPart = hasDisc ? `${strike(money(it.itemOriginal), html)} ${money(it.itemTotal)}` : money(it.itemTotal);
+    return `- ${it.sizeText}${it.colorLabel} — (${it.quantity}টি x ${unitPart}) = ${totalPart}`;
+}
 
-    const transName = document.getElementById('trans-name');
-    const transPhone = document.getElementById('trans-phone');
-    const transAddress = document.getElementById('trans-address');
-    const transLocation = document.getElementById('trans-location');
-    const transProducts = document.getElementById('trans-products-area');
-    const transSubtotal = document.getElementById('trans-subtotal');
-    const transWeight = document.getElementById('trans-weight');
-    const transShipping = document.getElementById('trans-shipping');
-    const transTotal = document.getElementById('trans-total');
-
+// ---------- 10. live transcript ----------
+function renderTranscript(d) {
+    const $ = id => document.getElementById(id);
     const setField = (el, value, placeholder) => {
         if (!el) return;
-        const val = value ? value.trim() : '';
-        el.innerText = val || placeholder;
-        el.classList.toggle('italic', !val);
-        el.classList.toggle('text-slate-500', !val);
+        const v = (value || '').trim();
+        el.innerText = v || placeholder;
+        el.classList.toggle('italic', !v);
+        el.classList.toggle('text-slate-500', !v);
     };
+    setField($('trans-name'), $('cust-name')?.value, 'No Name Provided');
+    setField($('trans-phone'), $('cust-phone')?.value, 'No Phone Provided');
+    setField($('trans-address'), $('cust-address')?.value, 'No Shipping Address Provided');
+    if ($('trans-location')) $('trans-location').innerText = d.isInside ? 'YES - (হ্যাঁ)' : 'NO - (না)';
 
-    setField(transName, nameInput ? nameInput.value : '', 'No Name Provided');
-    setField(transPhone, phoneInput ? phoneInput.value : '', 'No Phone Provided');
-    setField(transAddress, addressInput ? addressInput.value : '', 'No Shipping Address Provided');
-
-    if (transLocation) {
-        transLocation.innerText = data.isInside ? 'YES - (হ্যাঁ)' : 'NO - (না)';
-    }
-
-    if (transProducts) {
-        if (data.items.length === 0) {
-            transProducts.innerText = 'No Products Selected';
-            transProducts.classList.add('italic', 'text-slate-500');
+    const prod = $('trans-products-area');
+    if (prod) {
+        if (!d.items.length) {
+            prod.innerText = 'No Products Selected';
+            prod.classList.add('italic', 'text-slate-500');
         } else {
-            transProducts.classList.remove('italic', 'text-slate-500');
-            
-            transProducts.innerHTML = data.items.map(it => {
-                const productId = it.productId || '-';
-                const imageNote = it.uploadedFileName ? `<br>📷 Attached Design: ${it.uploadedFileName}` : '';
-                return `* ${it.productName} (ID: ${productId}) --><br>` +
-                       `- ${it.sizeText}${it.colorLabel || ''} — (${it.quantity}টি x ৳${it.unitPrice.toFixed(1)}) = ৳${it.itemTotal.toFixed(1)}${imageNote}`;
-            }).join('<br><br>');
+            prod.classList.remove('italic', 'text-slate-500');
+            prod.innerHTML = d.items.map(it =>
+                `* ${it.productName} (ID: ${it.productId}) --><br>${itemLine(it, true)}` +
+                (it.uploadedFileName ? `<br>📷 Attached Design: ${it.uploadedFileName}` : '')
+            ).join('<br><br>');
         }
     }
 
-    if (transSubtotal) transSubtotal.innerText = '৳' + data.subtotal.toFixed(1) + ' Total';
+    const sub = $('trans-subtotal');
+    if (sub) {
+        sub.innerHTML = d.totalDiscount > 0
+            ? `<s class="text-slate-400">${money(d.originalSubtotal)}</s> ${money(d.subtotal)} Total`
+            : `${money(d.subtotal)} Total`;
 
-    if (transWeight) {
-        const kg = (data.totalWeightGrams / 1000).toFixed(2);
-        transWeight.innerText = Math.round(data.totalWeightGrams) + ' Grams (' + kg + ' kg)';
+        // discount row (created automatically, no HTML edit needed)
+        let row = $('trans-discount-row');
+        if (!row) {
+            row = document.createElement('p');
+            row.id = 'trans-discount-row';
+            sub.closest('p').after(row);
+        }
+        row.classList.toggle('hidden', !(d.totalDiscount > 0));
+        row.innerHTML = `🎁 <strong>মোট ছাড়:</strong> <span class="text-rose-600 font-bold">${money(d.totalDiscount)}</span>`;
     }
 
-    if (transShipping) transShipping.innerText = '৳' + data.shippingCharge.toFixed(1);
-    if (transTotal) transTotal.innerText = '৳' + data.grandTotal.toFixed(1);
+    if ($('trans-weight')) $('trans-weight').innerText =
+        Math.round(d.totalWeightGrams) + ' Grams (' + (d.totalWeightGrams / 1000).toFixed(2) + ' kg)';
+    if ($('trans-shipping')) $('trans-shipping').innerText = money(d.shippingCharge);
+    if ($('trans-total')) $('trans-total').innerText = money(d.grandTotal);
 }
 
-
-// ==========================================
-// ১০. মেইন আপডেট ফাংশন
-// ==========================================
 function updateStickySummary() {
-    const data = computeOrderTotals();
-    renderStickyBar(data);
-    renderTranscript(data);
+    const d = computeOrderTotals();
+    renderStickyBar(d);
+    renderTranscript(d);
 }
+function updateTranscript() { updateStickySummary(); }
 
-function updateTranscript() {
-    updateStickySummary();
-}
+// ---------- 11. shared message (WhatsApp + Copy Transcript) ----------
+function buildOrderText(d) {
+    const val = id => (document.getElementById(id)?.value || '').trim();
+    let m = `📦 *অর্ডার কনফার্মেশন - Packsolution*\n\n`;
+    m += `👤 *নাম:* ${val('cust-name') || '—'}\n`;
+    m += `📞 *ফোন:* ${val('cust-phone') || '—'}\n`;
+    m += `📍 *ঠিকানা:* ${val('cust-address') || '—'}\n`;
+    m += `🚚 *ঢাকা সিটির ভিতরে:* ${d.isInside ? 'YES - (হ্যাঁ)' : 'NO - (না)'}\n\n`;
+    m += `🛍️ *অর্ডার ডিটেইলস:*\n`;
 
-
-// ==========================================
-// ১১. ট্রান্সক্রিপ্ট কপি করার ফাংশন
-// ==========================================
-function copyTranscriptText() {
-    const transArea = document.getElementById('trans-products-area');
-    const container = transArea ? transArea.closest('.rounded-2xl, .card-body, div') : null;
-    
-    if (!container) {
-        alert('❌ কপি করার মতো কোনো তথ্য পাওয়া যায়নি।');
-        return;
-    }
-
-    const textToCopy = container.innerText;
-    navigator.clipboard.writeText(textToCopy).then(() => {
-        alert('✅ ট্রান্সক্রিপ্ট কপি হয়েছে!');
-    }).catch(() => {
-        alert('❌ কপি করতে সমস্যা হয়েছে, আবার চেষ্টা করুন।');
+    d.items.forEach(it => {
+        m += `• ${it.productName} (ID: ${it.productId}) -->\n${itemLine(it, false)}\n`;
+        if (it.uploadedFileName) m += `📷 *ডিজাইন আপলোড:* ${it.uploadedFileName} (WhatsApp-এ সেন্ড করুন)\n`;
+        m += `\n`;
     });
-}
 
-
-// ==========================================
-// ১২. চেকআউট ফর্মে স্ক্রল করার ফাংশন
-// ==========================================
-function scrollToOrderForm() {
-    const form = document.getElementById('checkout-form');
-    if (form) form.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
-
-// ==========================================
-// ১৩. WhatsApp-এ অর্ডার পাঠানোর ফাংশন (Updated Breakdown Format)
-// ==========================================
-function sendOrderViaWhatsApp() {
-    const data = computeOrderTotals();
-
-    if (!data.items || data.items.length === 0) {
-        alert('⚠️ দয়া করে অন্তত একটি প্রোডাক্ট সিলেক্ট করুন।');
-        return;
+    const parts = d.items.map(it => money(it.itemTotal)).join(' + ');
+    m += `🧮 *সর্বমোট* = ${parts} = ${money(d.subtotal)} Total\n`;
+    if (d.totalDiscount > 0) {
+        m += `🏷️ *ছাড়ের আগে:* ~${money(d.originalSubtotal)}~ ➜ *ছাড়ের পরে:* ${money(d.subtotal)}\n`;
+        m += `🎁 *মোট ছাড়:* ${money(d.totalDiscount)}\n`;
     }
+    m += `\n📏 *মোট ওজন:* ${Math.round(d.totalWeightGrams)} Grams (${(d.totalWeightGrams / 1000).toFixed(2)} kg)\n`;
+    m += `🛳️ *শিপিং খরচ:* ${money(d.shippingCharge)}\n\n`;
+    m += `💰 *মোট খরচ:* ${money(d.grandTotal)}\n\n`;
+    m += `✅ আপনার অর্ডারটি কনফার্ম হয়েছে।\n`;
+    m += `ধন্যবাদ Packsolution থেকে অর্ডার করার জন্য! 💙\n`;
+    m += `From: shop.packsolution.org`;
+    return m;
+}
 
-    const nameInput = document.getElementById('cust-name');
-    const phoneInput = document.getElementById('cust-phone');
-    const addressInput = document.getElementById('cust-address');
+function copyTranscriptText() {
+    const d = computeOrderTotals();
+    if (!d.items.length) { alert('❌ কপি করার মতো কোনো প্রোডাক্ট সিলেক্ট করা হয়নি।'); return; }
+    navigator.clipboard.writeText(buildOrderText(d))
+        .then(() => alert('✅ ট্রান্সক্রিপ্ট কপি হয়েছে!'))
+        .catch(() => alert('❌ কপি করতে সমস্যা হয়েছে, আবার চেষ্টা করুন।'));
+}
 
-    const name = nameInput ? nameInput.value.trim() : '';
-    const phone = phoneInput ? phoneInput.value.trim() : '';
-    const address = addressInput ? addressInput.value.trim() : '';
+function scrollToOrderForm() {
+    document.getElementById('checkout-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
 
-    if (!name || !phone || !address) {
+function sendOrderViaWhatsApp() {
+    const d = computeOrderTotals();
+    if (!d.items.length) { alert('⚠️ দয়া করে অন্তত একটি প্রোডাক্ট সিলেক্ট করুন।'); return; }
+    const val = id => (document.getElementById(id)?.value || '').trim();
+    if (!val('cust-name') || !val('cust-phone') || !val('cust-address')) {
         alert('⚠️ দয়া করে নাম, ফোন নম্বর এবং ঠিকানা পূরণ করুন।');
         return;
     }
-
-    let message = `📦 *অর্ডার কনফার্মেশন - Packsolution*\n\n`;
-    message += `👤 *নাম:* ${name}\n`;
-    message += `📞 *ফোন:* ${phone}\n`;
-    message += `📍 *ঠিকানা:* ${address}\n`;
-    message += `🚚 *ঢাকা সিটির ভিতরে:* ${data.isInside ? 'YES - (হ্যাঁ)' : 'NO - (না)'}\n\n`;
-    
-    message += `🛍️ *অর্ডার ডিটেইলস:*\n`;
-
-    const itemCalculationParts = [];
-
-    data.items.forEach(it => {
-        const productId = it.productId || '-';
-
-        message += `• ${it.productName} (ID: ${productId}) -->\n`;
-        message += `- ${it.sizeText}${it.colorLabel || ''} — (${it.quantity}টি x ৳${it.unitPrice.toFixed(1)}) = ৳${it.itemTotal.toFixed(1)}\n`;
-        
-        if (it.uploadedFileName) {
-            message += `📷 *ডিজাইন আপলোড:* ${it.uploadedFileName} (WhatsApp-এ সেন্ড করুন)\n`;
-        }
-        
-        message += `\n`;
-
-        itemCalculationParts.push(`৳${it.itemTotal.toFixed(1)}`);
-    });
-
-    const breakdownString = itemCalculationParts.join(' + ');
-    message += `🧮 *সর্বমোট* = ${breakdownString} = ৳${data.subtotal.toFixed(1)} Total\n\n`;
-
-    message += `📏 *মোট ওজন:* ${Math.round(data.totalWeightGrams)} Grams (${(data.totalWeightGrams / 1000).toFixed(2)} kg)\n`;
-    message += `🛳️ *শিপিং খরচ:* ৳${data.shippingCharge.toFixed(1)}\n\n`;
-
-    message += `💰 *মোট খরচ:* ৳${data.grandTotal.toFixed(1)}\n\n`;
-
-    // 🔥 মেসেজ পার্ট 🔥
-    message += `✅ আপনার অর্ডারটি কনফার্ম হয়েছে।\n`;
-    message += `ধন্যবাদ Packsolution থেকে অর্ডার করার জন্য! 💙\n`;
-    message += `From: shop.packsolution.org`;
-
-    const encodedMessage = encodeURIComponent(message);
-    const phoneNumber = WHATSAPP_NUMBER;
-
-    // ডিভাইস অনু্যায়ী WhatsApp API রিডাইরেকশন
+    const text = encodeURIComponent(buildOrderText(d));
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    const whatsappUrl = isMobile 
-        ? `https://api.whatsapp.com/send?phone=${phoneNumber}&text=${encodedMessage}`
-        : `https://web.whatsapp.com/send?phone=${phoneNumber}&text=${encodedMessage}`;
-
-    window.open(whatsappUrl, '_blank');
+    const url = isMobile
+        ? `https://api.whatsapp.com/send?phone=${WHATSAPP_NUMBER}&text=${text}`
+        : `https://web.whatsapp.com/send?phone=${WHATSAPP_NUMBER}&text=${text}`;
+    window.open(url, '_blank');
 }
 
-
-// ============================================================
-// ১৪. View Images (Gallery & Fullscreen Preview) Dynamic Logic
-// ============================================================
-
+// ---------- 12. image gallery ----------
 function openImageGallery(images) {
     let modal = document.getElementById('gallery-modal');
-    
     if (!modal) {
         modal = document.createElement('div');
         modal.id = 'gallery-modal';
@@ -776,90 +470,81 @@ function openImageGallery(images) {
                 <button onclick="closeGalleryModal()" class="absolute top-3 right-3 text-slate-400 hover:text-slate-700 w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center font-bold">✕</button>
                 <h3 class="text-base font-bold text-slate-800 mb-3">পণ্যের ছবিসমূহ (ক্লিক করে বড় দেখুন)</h3>
                 <div id="gallery-grid" class="grid grid-cols-3 gap-3 max-h-[60vh] overflow-y-auto p-1"></div>
-            </div>
-        `;
+            </div>`;
         document.body.appendChild(modal);
     }
-
-    let fsModal = document.getElementById('fullscreen-modal');
-    if (!fsModal) {
-        fsModal = document.createElement('div');
-        fsModal.id = 'fullscreen-modal';
-        fsModal.className = 'fixed inset-0 z-[9999] bg-black/90 hidden items-center justify-center p-2 cursor-pointer';
-        fsModal.onclick = closeFullscreenModal;
-        fsModal.innerHTML = `
+    if (!document.getElementById('fullscreen-modal')) {
+        const fs = document.createElement('div');
+        fs.id = 'fullscreen-modal';
+        fs.className = 'fixed inset-0 z-[9999] bg-black/90 hidden items-center justify-center p-2 cursor-pointer';
+        fs.onclick = closeFullscreenModal;
+        fs.innerHTML = `
             <button class="absolute top-4 right-4 text-white text-2xl font-bold bg-white/20 w-10 h-10 rounded-full flex items-center justify-center">✕</button>
-            <img id="fullscreen-img" src="" alt="Full View" class="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl">
-        `;
-        document.body.appendChild(fsModal);
+            <img id="fullscreen-img" src="" alt="Full View" class="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl">`;
+        document.body.appendChild(fs);
     }
-
     const grid = document.getElementById('gallery-grid');
     grid.innerHTML = '';
-
-    if (Array.isArray(images)) {
-        images.forEach(imgUrl => {
-            const imgCard = document.createElement('div');
-            imgCard.className = 'aspect-square rounded-xl overflow-hidden border border-slate-200 bg-slate-50 cursor-pointer hover:opacity-90 hover:scale-105 transition transform shadow-sm';
-            imgCard.innerHTML = `<img src="${imgUrl}" class="w-full h-full object-cover" onerror="this.src='https://placehold.co/300x300?text=No+Image'">`;
-            
-            imgCard.onclick = () => openFullscreenImage(imgUrl);
-            grid.appendChild(imgCard);
-        });
-    }
-
+    (Array.isArray(images) ? images : []).forEach(url => {
+        const c = document.createElement('div');
+        c.className = 'aspect-square rounded-xl overflow-hidden border border-slate-200 bg-slate-50 cursor-pointer hover:opacity-90 hover:scale-105 transition transform shadow-sm';
+        c.innerHTML = `<img src="${url}" class="w-full h-full object-cover" onerror="this.src='https://placehold.co/300x300?text=No+Image'">`;
+        c.onclick = () => openFullscreenImage(url);
+        grid.appendChild(c);
+    });
     modal.classList.remove('hidden');
     modal.classList.add('flex');
 }
-
 function closeGalleryModal() {
-    const modal = document.getElementById('gallery-modal');
-    if (modal) {
-        modal.classList.add('hidden');
-        modal.classList.remove('flex');
-    }
+    const m = document.getElementById('gallery-modal');
+    if (m) { m.classList.add('hidden'); m.classList.remove('flex'); }
 }
-
-function openFullscreenImage(imgUrl) {
-    const fsModal = document.getElementById('fullscreen-modal');
-    const fsImg = document.getElementById('fullscreen-img');
-    if (fsModal && fsImg) {
-        fsImg.src = imgUrl;
-        fsModal.classList.remove('hidden');
-        fsModal.classList.add('flex');
-    }
+function openFullscreenImage(url) {
+    const m = document.getElementById('fullscreen-modal'), i = document.getElementById('fullscreen-img');
+    if (m && i) { i.src = url; m.classList.remove('hidden'); m.classList.add('flex'); }
 }
-
 function closeFullscreenModal() {
-    const fsModal = document.getElementById('fullscreen-modal');
-    if (fsModal) {
-        fsModal.classList.add('hidden');
-        fsModal.classList.remove('flex');
-    }
+    const m = document.getElementById('fullscreen-modal');
+    if (m) { m.classList.add('hidden'); m.classList.remove('flex'); }
 }
 
+// ---------- 13. inject discount row into EVERY size card ----------
+function injectDiscountRows() {
+    document.querySelectorAll('.size-option').forEach(opt => {
+        if (opt.querySelector('.discount-box')) return;
+        const preset = parseFloat(opt.getAttribute('data-discount')) || 0;
 
-// ==========================================
-// ১৫. পেজ লোড ও ইভেন্ট লিসেনার ইনিশিয়ালাইজেশন
-// ==========================================
-document.addEventListener('DOMContentLoaded', () => {
-    // ১. ডেলিভারি লোকেশন পরিবর্তনের সাথে সাথে মোট প্রাইস আপডেট করা
-    const locationRadios = document.querySelectorAll('input[name="delivery_location"]');
-    locationRadios.forEach(radio => {
-        radio.addEventListener('change', updateStickySummary);
-    });
+        const box = document.createElement('div');
+        box.className = 'discount-box hidden mt-2 pt-2 border-t border-slate-100 flex items-center justify-between gap-2';
+        box.addEventListener('click', e => e.stopPropagation());
+        box.innerHTML = SHOW_DISCOUNT_INPUT
+            ? `<label class="text-[11px] font-semibold text-rose-600 whitespace-nowrap">🏷️ ছাড় (৳/পিস):</label>
+               <input type="number" min="0" step="0.01" value="${preset}"
+                      class="discount-input w-16 h-7 border border-rose-200 rounded-md text-center text-xs font-bold text-rose-600 focus:outline-none focus:border-rose-500">
+               <span class="discount-info text-[10px] text-slate-500 text-right"></span>`
+            : `<span class="text-[11px] font-semibold text-rose-600">🏷️ ছাড় প্রযোজ্য</span>
+               <span class="discount-info text-[10px] text-slate-500 text-right"></span>`;
+        opt.appendChild(box);
 
-    // ২. কাস্টমার ইনফরমেশন টাইপ করার সাথে সাথে ট্রান্সক্রিপ্ট আপডেট
-    ['cust-name', 'cust-phone', 'cust-address'].forEach(id => {
-        const input = document.getElementById(id);
-        if (input) {
-            input.addEventListener('input', updateStickySummary);
+        const inp = box.querySelector('.discount-input');
+        if (inp) {
+            inp.addEventListener('input', () => {
+                const qty = parseInt(opt.querySelector('.quantity-box input[type="number"]')?.value, 10) || 0;
+                updateItemCalculations(opt, qty);
+                updateStickySummary();
+            });
         }
+        if (!SHOW_DISCOUNT_INPUT && preset <= 0) box.remove();
     });
+}
 
-    // ৩. প্রতিটা কার্ড-লেভেল কালার সেকশনে (Card 5, Card 6...) ডিফল্ট কালার অটো-সিলেক্ট
+// ---------- 14. init ----------
+document.addEventListener('DOMContentLoaded', () => {
+    injectDiscountRows();
+    document.querySelectorAll('input[name="delivery_location"]').forEach(r => r.addEventListener('change', updateStickySummary));
+    ['cust-name', 'cust-phone', 'cust-address'].forEach(id => {
+        document.getElementById(id)?.addEventListener('input', updateStickySummary);
+    });
     autoSelectDefaultCardColors();
-
-    // ৪. প্রাথমিক হিসাব চালানো
     updateStickySummary();
 });
