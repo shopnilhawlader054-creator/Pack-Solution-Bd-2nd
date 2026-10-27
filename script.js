@@ -1,28 +1,17 @@
 // ============================================================
-// Packsolution Order System — with Discount + Unlimited Qty
+// Packsolution Order System — Single Total Discount + Unlimited Qty
 // Inside Dhaka = ৳80, Outside Dhaka = ৳130, +৳20 per extra kg
-// Discount = taka per piece/roll. Set with data-discount="2" on a .size-option
+// One discount input (#total-discount) is subtracted from the products subtotal.
 // ============================================================
 
 const WHATSAPP_NUMBER = "8801629370622";
 const DELIVERY_CHARGE = { "Inside Dhaka": 80, "Outside Dhaka": 130 };
 const WEIGHT_CHARGE_PER_KG = 20;
 
-// true  = every size card shows an editable "ছাড়" input
-// false = discount comes only from data-discount in HTML (customers can't edit)
-const SHOW_DISCOUNT_INPUT = true;
-
 const money = n => '৳' + (+Number(n).toFixed(2));
 
 // ---------- helpers ----------
 const getUnitPrice = opt => parseFloat(opt.getAttribute('data-unit-price')) || 0;
-
-function getDiscount(opt) {
-    const inp = opt.querySelector('.discount-input');
-    let d = inp ? parseFloat(inp.value) : parseFloat(opt.getAttribute('data-discount'));
-    if (isNaN(d) || d < 0) d = 0;
-    return Math.min(d, getUnitPrice(opt)); // discount can't exceed price
-}
 
 function getMin(opt) {
     const inp = opt.querySelector('.quantity-box input[type="number"]');
@@ -50,11 +39,9 @@ function handleImageUpload(event, input) {
 function selectSizeOption(opt, unitPrice) {
     const card = opt.closest('.product-card');
     const qtyBox = opt.querySelector('.quantity-box');
-    const discBox = opt.querySelector('.discount-box');
     const radio = opt.querySelector('.custom-radio');
 
     if (unitPrice !== undefined) opt.setAttribute('data-unit-price', unitPrice);
-    unitPrice = getUnitPrice(opt);
 
     if (opt.classList.contains('border-blue-500')) {
         opt.classList.remove('border-blue-500', 'bg-blue-50/30');
@@ -65,7 +52,6 @@ function selectSizeOption(opt, unitPrice) {
             radio.innerText = '';
         }
         if (qtyBox) qtyBox.classList.add('hidden');
-        if (discBox) discBox.classList.add('hidden');
         resetColorSelection(opt);
     } else {
         opt.classList.remove('border-slate-200', 'bg-white');
@@ -76,7 +62,6 @@ function selectSizeOption(opt, unitPrice) {
             radio.innerText = '✓';
         }
         if (qtyBox) qtyBox.classList.remove('hidden');
-        if (discBox) discBox.classList.remove('hidden');
 
         const qtyInput = opt.querySelector('.quantity-box input[type="number"]');
         const minQty = getMin(opt);
@@ -119,7 +104,7 @@ function handleManualInput(event, input) {
     if (event) event.stopPropagation();
     const opt = input.closest('.size-option');
     const val = parseInt(input.value, 10);
-    updateItemCalculations(opt, isNaN(val) || val < 0 ? 0 : val); // any number allowed while typing
+    updateItemCalculations(opt, isNaN(val) || val < 0 ? 0 : val);
     updateStickySummary();
 }
 
@@ -128,7 +113,7 @@ function validateInputLimit(event, input) {
     const opt = input.closest('.size-option');
     const min = getMin(opt);
     let val = parseInt(input.value, 10);
-    if (isNaN(val) || val < min) val = min;   // only a minimum, never a maximum
+    if (isNaN(val) || val < min) val = min;
     input.value = val;
     updateItemCalculations(opt, val);
     updateStickySummary();
@@ -243,22 +228,10 @@ function calculateWeightFromOption(card, sizeText, opt) {
 // ---------- 6. per-size price / weight display ----------
 function updateItemCalculations(opt, qty) {
     const card = opt.closest('.product-card');
-    const unit = getUnitPrice(opt);
-    const disc = getDiscount(opt);
-    const orig = qty * unit;
-    const final = qty * (unit - disc);
+    const total = qty * getUnitPrice(opt);
 
     const priceEl = opt.querySelector('.total-price-text');
-    if (priceEl) {
-        priceEl.innerHTML = disc > 0
-            ? `<s class="text-slate-400 font-medium mr-1">${money(orig)}</s>${money(final)}`
-            : money(final);
-    }
-
-    const info = opt.querySelector('.discount-info');
-    if (info) {
-        info.innerText = disc > 0 ? `(প্রতি পিস ${money(unit - disc)}, সাশ্রয় ${money(orig - final)})` : '';
-    }
+    if (priceEl) priceEl.innerText = money(total);
 
     const wEl = opt.querySelector('.total-weight-text');
     if (wEl && card) {
@@ -273,7 +246,7 @@ function updateItemCalculations(opt, qty) {
 // ---------- 7. order totals ----------
 function computeOrderTotals() {
     const items = [];
-    let subtotal = 0, originalSubtotal = 0, totalWeightGrams = 0;
+    let itemsSum = 0, totalWeightGrams = 0;
 
     document.querySelectorAll('.size-option.border-blue-500').forEach(opt => {
         const card = opt.closest('.product-card');
@@ -285,20 +258,16 @@ function computeOrderTotals() {
         const quantity = qtyInput ? (parseInt(qtyInput.value, 10) || 0) : 1;
 
         const unitPrice = getUnitPrice(opt);
-        const discount = getDiscount(opt);
-        const discountedUnit = unitPrice - discount;
-        const itemOriginal = quantity * unitPrice;
-        const itemTotal = quantity * discountedUnit;
+        const itemTotal = quantity * unitPrice;
 
-        subtotal += itemTotal;
-        originalSubtotal += itemOriginal;
+        itemsSum += itemTotal;
         const itemWeight = calculateWeightFromOption(card, sizeText, opt) * quantity;
         totalWeightGrams += itemWeight;
 
         const color = opt.dataset.selectedColor || card?.dataset.selectedColor || '';
         items.push({
             productId, productName, sizeText, quantity,
-            unitPrice, discount, discountedUnit, itemOriginal, itemTotal,
+            unitPrice, itemTotal,
             weightGrams: itemWeight,
             colorLabel: color ? ` [কালার: ${color}]` : '',
             uploadedFileName: card?.dataset.uploadedFileName || ''
@@ -311,10 +280,20 @@ function computeOrderTotals() {
     const weightCharge = weightKg > 1 ? Math.ceil(weightKg - 1) * WEIGHT_CHARGE_PER_KG : 0;
     const shippingCharge = items.length > 0 ? baseShipping + weightCharge : 0;
 
+    // ---- single total discount (taken off products subtotal) ----
+    let totalDiscount = parseFloat(document.getElementById('total-discount')?.value);
+    if (isNaN(totalDiscount) || totalDiscount < 0) totalDiscount = 0;
+    totalDiscount = Math.min(totalDiscount, itemsSum);
+    const discountedSubtotal = itemsSum - totalDiscount;
+
     return {
-        items, subtotal, originalSubtotal, totalDiscount: originalSubtotal - subtotal,
+        items,
+        subtotal: discountedSubtotal,   // after discount
+        originalSubtotal: itemsSum,     // before discount
+        totalDiscount,
         totalWeightGrams, location: loc, isInside: loc === 'Inside Dhaka',
-        baseShipping, weightCharge, shippingCharge, grandTotal: subtotal + shippingCharge
+        baseShipping, weightCharge, shippingCharge,
+        grandTotal: discountedSubtotal + shippingCharge
     };
 }
 
@@ -330,14 +309,9 @@ function renderStickyBar(d) {
         `(${Math.floor(d.totalWeightGrams / 1000)} kg ${Math.round(d.totalWeightGrams % 1000)} g)`);
 }
 
-// ---------- 9. line formatting (HTML for transcript, ~strike~ for WhatsApp/copy) ----------
-function strike(text, html) { return html ? `<s>${text}</s>` : `~${text}~`; }
-
-function itemLine(it, html) {
-    const hasDisc = it.discount > 0;
-    const unitPart = hasDisc ? `${strike(money(it.unitPrice), html)} ${money(it.discountedUnit)}` : money(it.unitPrice);
-    const totalPart = hasDisc ? `${strike(money(it.itemOriginal), html)} ${money(it.itemTotal)}` : money(it.itemTotal);
-    return `- ${it.sizeText}${it.colorLabel} — (${it.quantity}টি x ${unitPart}) = ${totalPart}`;
+// ---------- 9. line formatting ----------
+function itemLine(it) {
+    return `- ${it.sizeText}${it.colorLabel} — (${it.quantity}টি x ${money(it.unitPrice)}) = ${money(it.itemTotal)}`;
 }
 
 // ---------- 10. live transcript ----------
@@ -363,7 +337,7 @@ function renderTranscript(d) {
         } else {
             prod.classList.remove('italic', 'text-slate-500');
             prod.innerHTML = d.items.map(it =>
-                `* ${it.productName} (ID: ${it.productId}) --><br>${itemLine(it, true)}` +
+                `* ${it.productName} (ID: ${it.productId}) --><br>${itemLine(it)}` +
                 (it.uploadedFileName ? `<br>📷 Attached Design: ${it.uploadedFileName}` : '')
             ).join('<br><br>');
         }
@@ -375,7 +349,7 @@ function renderTranscript(d) {
             ? `<s class="text-slate-400">${money(d.originalSubtotal)}</s> ${money(d.subtotal)} Total`
             : `${money(d.subtotal)} Total`;
 
-        // discount row (created automatically, no HTML edit needed)
+        // discount row (created automatically)
         let row = $('trans-discount-row');
         if (!row) {
             row = document.createElement('p');
@@ -399,36 +373,36 @@ function updateStickySummary() {
 }
 function updateTranscript() { updateStickySummary(); }
 
-// ---------- 11. shared message (WhatsApp + Copy Transcript) ----------
-function buildOrderText(d) {
-    const val = id => (document.getElementById(id)?.value || '').trim();
-    let m = `📦 *অর্ডার কনফার্মেশন - Packsolution*\n\n`;
-    m += `👤 *নাম:* ${val('cust-name') || '—'}\n`;
-    m += `📞 *ফোন:* ${val('cust-phone') || '—'}\n`;
-    m += `📍 *ঠিকানা:* ${val('cust-address') || '—'}\n`;
-    m += `🚚 *ঢাকা সিটির ভিতরে:* ${d.isInside ? 'YES - (হ্যাঁ)' : 'NO - (না)'}\n\n`;
-    m += `🛍️ *অর্ডার ডিটেইলস:*\n`;
+// // ---------- 11. shared message (WhatsApp + Copy Transcript) ----------
+// function buildOrderText(d) {
+//     const val = id => (document.getElementById(id)?.value || '').trim();
+//     let m = `📦 *অর্ডার কনফার্মেশন - Packsolution*\n\n`;
+//     m += `👤 *নাম:* ${val('cust-name') || '—'}\n`;
+//     m += `📞 *ফোন:* ${val('cust-phone') || '—'}\n`;
+//     m += `📍 *ঠিকানা:* ${val('cust-address') || '—'}\n`;
+//     m += `🚚 *ঢাকা সিটির ভিতরে:* ${d.isInside ? 'YES - (হ্যাঁ)' : 'NO - (না)'}\n\n`;
+//     m += `🛍️ *অর্ডার ডিটেইলস:*\n`;
 
-    d.items.forEach(it => {
-        m += `• ${it.productName} (ID: ${it.productId}) -->\n${itemLine(it, false)}\n`;
-        if (it.uploadedFileName) m += `📷 *ডিজাইন আপলোড:* ${it.uploadedFileName} (WhatsApp-এ সেন্ড করুন)\n`;
-        m += `\n`;
-    });
+//     d.items.forEach(it => {
+//         m += `• ${it.productName} (ID: ${it.productId}) -->\n${itemLine(it)}\n`;
+//         if (it.uploadedFileName) m += `📷 *ডিজাইন আপলোড:* ${it.uploadedFileName} (WhatsApp-এ সেন্ড করুন)\n`;
+//         m += `\n`;
+//     });
 
-    const parts = d.items.map(it => money(it.itemTotal)).join(' + ');
-    m += `🧮 *সর্বমোট* = ${parts} = ${money(d.subtotal)} Total\n`;
-    if (d.totalDiscount > 0) {
-        m += `🏷️ *ছাড়ের আগে:* ~${money(d.originalSubtotal)}~ ➜ *ছাড়ের পরে:* ${money(d.subtotal)}\n`;
-        m += `🎁 *মোট ছাড়:* ${money(d.totalDiscount)}\n`;
-    }
-    m += `\n📏 *মোট ওজন:* ${Math.round(d.totalWeightGrams)} Grams (${(d.totalWeightGrams / 1000).toFixed(2)} kg)\n`;
-    m += `🛳️ *শিপিং খরচ:* ${money(d.shippingCharge)}\n\n`;
-    m += `💰 *মোট খরচ:* ${money(d.grandTotal)}\n\n`;
-    m += `✅ আপনার অর্ডারটি কনফার্ম হয়েছে।\n`;
-    m += `ধন্যবাদ Packsolution থেকে অর্ডার করার জন্য! 💙\n`;
-    m += `From: shop.packsolution.org`;
-    return m;
-}
+//     const parts = d.items.map(it => money(it.itemTotal)).join(' + ');
+//     m += `🧮 *সর্বমোট* = ${parts} = ${money(d.originalSubtotal)} Total\n`;
+//     if (d.totalDiscount > 0) {
+//         m += `🏷️ *ছাড়ের আগে:* ~${money(d.originalSubtotal)}~ ➜ *ছাড়ের পরে:* ${money(d.subtotal)}\n`;
+//         m += `🎁 *মোট ছাড়:* ${money(d.totalDiscount)}\n`;
+//     }
+//     m += `\n📏 *মোট ওজন:* ${Math.round(d.totalWeightGrams)} Grams (${(d.totalWeightGrams / 1000).toFixed(2)} kg)\n`;
+//     m += `🛳️ *শিপিং খরচ:* ${money(d.shippingCharge)}\n\n`;
+//     m += `💰 *মোট খরচ:* ${money(d.grandTotal)}\n\n`;
+//     m += `✅ আপনার অর্ডারটি কনফার্ম হয়েছে।\n`;
+//     m += `ধন্যবাদ Packsolution থেকে অর্ডার করার জন্য! 💙\n`;
+//     m += `From: shop.packsolution.org`;
+//     return m;
+// }
 
 function copyTranscriptText() {
     const d = computeOrderTotals();
@@ -508,41 +482,31 @@ function closeFullscreenModal() {
     if (m) { m.classList.add('hidden'); m.classList.remove('flex'); }
 }
 
-// ---------- 13. inject discount row into EVERY size card ----------
-function injectDiscountRows() {
-    document.querySelectorAll('.size-option').forEach(opt => {
-        if (opt.querySelector('.discount-box')) return;
-        const preset = parseFloat(opt.getAttribute('data-discount')) || 0;
+// ---------- 13. single total discount input (auto-added, no HTML edit needed) ----------
+function injectTotalDiscountInput() {
+    // remove any old per-card discount boxes if they exist
+    document.querySelectorAll('.discount-box').forEach(b => b.remove());
 
-        const box = document.createElement('div');
-        box.className = 'discount-box hidden mt-2 pt-2 border-t border-slate-100 flex items-center justify-between gap-2';
-        box.addEventListener('click', e => e.stopPropagation());
-        box.innerHTML = SHOW_DISCOUNT_INPUT
-            ? `<label class="text-[11px] font-semibold text-rose-600 whitespace-nowrap">🏷️ ছাড় (৳/পিস):</label>
-               <input type="number" min="0" step="0.01" value="${preset}"
-                      class="discount-input w-16 h-7 border border-rose-200 rounded-md text-center text-xs font-bold text-rose-600 focus:outline-none focus:border-rose-500">
-               <span class="discount-info text-[10px] text-slate-500 text-right"></span>`
-            : `<span class="text-[11px] font-semibold text-rose-600">🏷️ ছাড় প্রযোজ্য</span>
-               <span class="discount-info text-[10px] text-slate-500 text-right"></span>`;
-        opt.appendChild(box);
+    if (document.getElementById('total-discount')) return; // already in HTML
 
-        const inp = box.querySelector('.discount-input');
-        if (inp) {
-            inp.addEventListener('input', () => {
-                const qty = parseInt(opt.querySelector('.quantity-box input[type="number"]')?.value, 10) || 0;
-                updateItemCalculations(opt, qty);
-                updateStickySummary();
-            });
-        }
-        if (!SHOW_DISCOUNT_INPUT && preset <= 0) box.remove();
-    });
+    const totalEl = document.getElementById('trans-total');
+    const anchor = totalEl ? totalEl.closest('.border-t') : null; // "মোট খরচ" block
+    if (!anchor) return;
+
+    const box = document.createElement('div');
+    box.className = 'border-t border-blue-200/60 pt-3 mt-3 flex items-center justify-between gap-2';
+    box.innerHTML = `
+        <label for="total-discount" class="text-[11px] font-bold text-rose-600 whitespace-nowrap">🏷️ ছাড় (৳ মোট):</label>
+        <input id="total-discount" type="number" min="0" step="1" value="0"
+               class="w-24 h-8 border border-rose-200 rounded-md text-center text-xs font-bold text-rose-600 bg-white focus:outline-none focus:border-rose-500">`;
+    anchor.before(box);
 }
 
 // ---------- 14. init ----------
 document.addEventListener('DOMContentLoaded', () => {
-    injectDiscountRows();
+    injectTotalDiscountInput();
     document.querySelectorAll('input[name="delivery_location"]').forEach(r => r.addEventListener('change', updateStickySummary));
-    ['cust-name', 'cust-phone', 'cust-address'].forEach(id => {
+    ['cust-name', 'cust-phone', 'cust-address', 'total-discount'].forEach(id => {
         document.getElementById(id)?.addEventListener('input', updateStickySummary);
     });
     autoSelectDefaultCardColors();
